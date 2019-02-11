@@ -3,26 +3,21 @@
 ####################################
 
 from __future__ import print_function
-import httplib2
 import os
 
-from apiclient import discovery
-from oauth2client import client
-from oauth2client import tools
-from oauth2client.file import Storage
+import datetime
+import pickle
+import os.path
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 
 import datetime
 import itertools
 import sys
 
-# try:
-#     import argparse
-#     flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
-# except ImportError:
-#     flags = None
-
-SCOPES = 'https://www.googleapis.com/auth/calendar'
-CLIENT_SECRET_FILE = 'client_secret.json'
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+CLIENT_SECRET_FILE = 'credentials.json'
 APPLICATION_NAME = 'Google Calendar API Python Quickstart'
 
 SCRIPT_NAME = os.path.basename(sys.argv[0])
@@ -31,24 +26,28 @@ RACE_DAY_SUMMARY = 'RACE DAY'
 TRAINING_CALENDAR_EVENT_DATE_FORMAT = '%Y-%m-%d'
 TEMPLATE_CALENDAR_NAME = 'Iron Man 70.3 Training Template'
 
-# Gets credentials from local store (if cached) or goes through OAuth2 flow.
-def get_credentials():
-    home_dir = os.path.expanduser('~')
-    credential_dir = os.path.join(home_dir, '.credentials')
-    if not os.path.exists(credential_dir):
-        os.makedirs(credential_dir)
-    credential_path = os.path.join(credential_dir, 'calendar-python-quickstart.json')
-    store = Storage(credential_path)
-    credentials = store.get()
-    if not credentials or credentials.invalid:
-        flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
-        flow.user_agent = APPLICATION_NAME
-        if flags:
-            credentials = tools.run_flow(flow, store, flags)
-        else: # Needed only for compatibility with Python 2.6
-            credentials = tools.run(flow, store)
-        print('Storing credentials to ' + credential_path)
-    return credentials
+def get_calendar_service():
+    creds = None
+    # The file token.pickle stores the user's access and refresh tokens, and is
+    # created automatically when the authorization flow completes for the first
+    # time.
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRET_FILE, SCOPES)
+            creds = flow.run_local_server()
+        # Save the credentials for the next run
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    service = build('calendar', 'v3', credentials=creds)
+    return service
 
 ####################################
 #              My Code             #
@@ -64,12 +63,6 @@ def print_table(dicts, keys=[]):
     print(format_str.format(*['-'*column_lens[k] for k in keys]))
     for d in dicts:
         print(format_str.format(*[d.get(k,'') for k in keys]))
-
-def get_calendar_service():
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    service = discovery.build('calendar', 'v3', http=http)
-    return service
 
 def get_events_for_calendar(service, calendar_id='primary', num_events=10, from_time=(datetime.datetime.min.isoformat() + 'Z')):
     eventsResult = service.events().list(
@@ -138,7 +131,34 @@ def create_training_calendar(service, new_calendar_name, template_calendar_name,
     print("Complete!")
 
 def help():
-    print("Usage: {} CALENDAR-NAME RACE-DAY [EVENT-TAG]".format(SCRIPT_NAME), file=sys.stderr)
+    helpstr = """{script_upper}
+    Create a triathlon training calendar in Google Calendars using a standard template.
+    The calendar will be set up such that the appropriate day in the training cycle
+    lands on the given race day (i.e. the 16th Sunday in the cycle).
+
+USAGE:
+    $ python {script} CALENDAR-NAME RACE-DAY [EVENT-TAG]
+
+    CALENDAR-NAME
+        Display name for the calendar to be created.
+    RACE-DAY
+        Date that the given race will take place. Format: '{fmt}'
+    EVENT-TAG
+        (optional) Name of the tag with which each event in the calendar will be tagged.
+
+EXAMPLES:
+  - Create a new calendar called 'Iron Dragon 2019' for a race day on June 15, 2019:
+
+      $ python {script} 'Iron Dragon 2019' '2019-06-15'
+
+  - Create a new calendar called 'Iron Man 70.3 (Madison 2020)' for a race day on
+    July 4, 2020 and tag each event with 'IM2020':
+
+      $ python {script} 'Iron Man 70.3 (Madison 2020)' '2020-07-04' 'IM2020'
+
+""".format(script_upper=SCRIPT_NAME.upper(), script=SCRIPT_NAME, fmt=TRAINING_CALENDAR_EVENT_DATE_FORMAT)
+
+    print(helpstr, file=sys.stderr)
     sys.exit(0)
 
 def main():
