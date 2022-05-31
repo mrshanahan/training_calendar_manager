@@ -16,11 +16,11 @@ import datetime
 import itertools
 import sys
 
+SCRIPT_NAME = "create_training_calendar.py"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 CLIENT_SECRET_FILE = 'credentials.json'
 APPLICATION_NAME = 'Google Calendar API Python Quickstart'
 
-SCRIPT_NAME = os.path.basename(sys.argv[0])
 EVENT_PROPERTIES_TO_RETAIN = ['summary','description','notes']
 RACE_DAY_SUMMARY = 'RACE DAY'
 TRAINING_CALENDAR_EVENT_DATE_FORMAT = '%Y-%m-%d'
@@ -130,52 +130,194 @@ def create_training_calendar(service, new_calendar_name, template_calendar_name,
 
     print("Complete!")
 
-def help():
+def load_events_from_calendar(service, calendar_name):
+    cal_id_map = get_calendar_name_id_map(service)
+    if calendar_name not in cal_id_map:
+        raise ValueError("Provided template calendar '{}' does not exist.".format(template_calendar_name))
+
+    calendar_id = cal_id_map[template_calendar_name]
+    events = get_events_for_calendar(service, calendar_id=template_calendar_id, num_events=500)
+    return events
+
+def load_events_from_file(path, column_map, race_day, ends_on_race_day):
+    events = []
+    race_day_index = -1
+    column_map_lower = { k.lower(): v for (k,v) in column_map.items() }
+    # TODO: Close file ASAP after opening
+    with open(path, 'r') as f:
+        reader = csv.DictReader(f)
+        for i,row in enumerate(reader):
+            # TODO: Do this all at once, not per record.
+            lower = { k.lower(): v for (k,v) in row.items() }
+            for from_c,to_c in column_map.items():
+                if to_c in lower:
+                    exit_with_error(\
+                        "error: cannot map column '{0}' to '{1}' because '{1}' already exists (file: {2})".format(\
+                        from_c, to_c, path))
+                if from_c in lower:
+                    lower[to_c] = lower[from_c]
+                    del lower[from_c]
+            if 'summary' not in lower:
+                exit_with_error("error: expected column 'summary', but none found (file: {})".format(path))
+            if not ends_on_race_day and lower['summary'] == 'RACE DAY':
+                if race_day_index >= 0:
+                    exit_with_error(\
+                        "error: multiple events with summary 'RACE DAY' found; expected at most 1 " +
+                        "(second found at entry {} in file: {})".format(i+1, path))
+                race_day_index = i
+            events.append(row)
+    if ends_on_race_day:
+        race_day_index = len(events)-1
+    if race_day_index < 0:
+        exit_with_error(
+            "error: no race day detected; ensure that there is a single event with the summary 'RACE DAY'" +
+            " or pass the --ends-on-race-day switch to this script (file: {})".format(path))
+
+    race_day_dt = datetime.datetime.strptime(race_day, TRAINING_CALENDAR_EVENT_DATE_FORMAT)
+    num_events = len(events)
+    for i in range(num_events-1, 1, -1):
+         
+    return events
+
+def exit_with_error(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+def help_and_exit():
     helpstr = """{script_upper}
-    Create a triathlon training calendar in Google Calendars using a standard template.
-    The calendar will be set up such that the appropriate day in the training cycle
-    lands on the given race day (i.e. the 16th Sunday in the cycle).
+    Create a training calendar in Google Calendars using a standard template or a
+    CSV file of events.
 
 USAGE:
-    $ python {script} CALENDAR-NAME RACE-DAY [EVENT-TAG]
+    $ python {script} [-n] <new-calendar-name> [-r] <race-day> [options]
 
-    CALENDAR-NAME
-        Display name for the calendar to be created.
-    RACE-DAY
-        Date that the given race will take place. Format: '{fmt}'
-    EVENT-TAG
-        (optional) Name of the tag with which each event in the calendar will be tagged.
+    -n,--name <name>                    Display name for the calendar to be created.
+    -r,--race-day <date>                Date that the given race will take place. Format: '{fmt}'
+    -f,--file <path>                    CSV file from which events should be copied.
+    -c,--template-calendar <name>       Name of template calendar from which events should
+                                          be copied.
+    -t,--tag <name>                     Name of the tag with which each event in the calendar
+                                          will be tagged.
+    -m,--column-map <col>:<prop>[,...]  Provides a mapping of CSV columns to event properties.
+                                          A warning will be written if this is used with -c,
+                                          but it otherwise does nothing.
+    --ends-on-race-day                  Indicates that the last event in the CSV file should be
+                                          used as the race day. A warning will be written if this
+                                          is used with -c, but it otherwise does nothing.
+    -h,--help,-?                        Show this message & exit.
+
+DESCRIPTION:
+    The calendar will be set up such that the appropriate day in the training cycle
+    lands on the given race day, generally the 16th Sunday in the cycle. The new calendar
+    is aligned with the race day with the following decision:
+        - If copying from a template calendar, then an event with the summary 'RACE DAY'
+          is found, and each event in the template calendar is copied to the new
+          calendar with its date shifted by the shift in the discovered race day.
+        - If creating a new calendar from a CSV file, then an event with the summary
+          'RACE DAY' is discovered in the CSV file and then the same process occurs.
+
+CSV FILE FORMAT:
+  - The CSV file must have columns 'Summary' and 'Description' (not case sensitive). These
+    columns may be mapped using the -m/--column-map parameter, but an error will be thrown
+    if they cannot be found.
+  - Events will be added in-order; any day-of-week or date columns will be ignored.
+  - Days must include weekends.
+  - A 'Notes' column will also be recognized & used if available, mapping to the corresponding
+    Google Calendar event property.
+  - If a race day is not detected via the 'RACE DAY' summary & the --ends-on-race-day flag is
+    not provided, an error will be thrown.
 
 EXAMPLES:
   - Create a new calendar called 'Iron Dragon 2019' for a race day on June 15, 2019:
 
-      $ python {script} 'Iron Dragon 2019' '2019-06-15'
+      $ python {script} \\
+              -n 'Iron Dragon 2019' -r '2019-06-15' -c 'Iron Man 70.3 Training Template'
 
   - Create a new calendar called 'Iron Man 70.3 (Madison 2020)' for a race day on
     July 4, 2020 and tag each event with 'IM2020':
 
-      $ python {script} 'Iron Man 70.3 (Madison 2020)' '2020-07-04' 'IM2020'
+      $ python {script} \\
+              -n 'Iron Man 70.3 (Madison 2020)' -r '2020-07-04' \\
+              -c 'Iron Man 70.3 Training Template' -t 'IM2020'
+
+  - Create a new calendar called 'Baltimore Marathon 2022' for a race day on
+    October 15, 2022 using events from a CSV file called 'marathon_training.csv':
+
+      $ cat marathon_training.csv | head -5
+      Week,Day,Description,Notes
+      1,Mon,15 min jog,"Allowed to walk, but not part of training"
+      ,Tue,REST,
+      ,Wed,20 min jog,"Allowed to walk, but not part of training"
+      ,Thu,REST,
+      $ python {script} \\
+              -n 'Baltimore Marathon 2022' -r '2022-10-15' -f marathon_training.csv
 
 """.format(script_upper=SCRIPT_NAME.upper(), script=SCRIPT_NAME, fmt=TRAINING_CALENDAR_EVENT_DATE_FORMAT)
 
     print(helpstr, file=sys.stderr)
     sys.exit(0)
 
-def main():
-    args = sys.argv[1:]
-    if len(args) < 2:
-        help()
-    if len(args) > 3:
-        print("{}: warning: expected at most 4 arguments, got {}; ignoring rest".format(sys.argv[0], len(args)), file=sys.stderr)
-    new_calendar_name = args[0]
-    race_day = args[1]
-    if len(args) >= 4:
-        tag = args[2]
+def main(args):
+    inputs = {}
+    while i < len(args):
+        arg = args[i]
+        if arg in ('-n','--name'):
+            if 'name' in inputs:
+                msg = "error: --name already specified"
+                exit_with_error(msg)
+            inputs['name'] = args[i+1]
+            i += 2
+        elif arg in ('-r','--race-day'):
+            if 'race_day' in inputs:
+                msg = "error: --race-day already specified"
+                exit_with_error(msg)
+            inputs['race_day'] = args[i+1]
+            i += 2
+        elif arg in ('-f','--file'):
+            inputs['file'] = args[i+1]
+            i += 2
+        elif arg in ('-c','--template-calendar-name'):
+            inputs['template_calendar_name'] = args[i+1]
+            i += 2
+        elif arg in ('-t','--tag'):
+            inputs['tag'] = args[i+1]
+            i += 2
+        elif arg in ('-m','--column-map'):
+            inputs['column_map'] = args[i+1]
+            i += 2
+        elif arg == '--ends-on-race-day':
+            inputs['ends_on_race_day'] = True
+            i += 1
+        else:
+            if 'name' in inputs:
+                if 'race_day' in inputs:
+                    msg = 'error: invalid positional argument (--name & --race-day already specified): {}'.format(arg)
+                    exit_with_error(msg)
+                inputs['race_day'] = arg
+            else:
+                inputs['name'] = arg
+            i += 1
+
+    no_required_arg_fmt = 'error: missing required argument: {}'
+    if 'name' not in inputs:
+        msg = no_required_arg_fmt.format('--name')
+        exit_with_error(msg)
+    if 'race_day' not in inputs:
+        msg = no_required_arg_fmt.format('--race-day')
+        exit_with_error(msg)
+
+    new_calendar_name = inputs['name']
+    race_day = inputs['race_day']
+    if 'tag' in inputs:
+        tag = inputs['tag'
     else:
         tag = None
 
+    if 'file' in inputs:
+        events = load_events_from_file(inputs['file'])
     service = get_calendar_service()
     create_training_calendar(service, new_calendar_name, TEMPLATE_CALENDAR_NAME, race_day, tag=tag)
 
 if __name__ == '__main__':
-    main()
+    args = sys.argv[1:]
+    main(args)
