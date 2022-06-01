@@ -130,17 +130,33 @@ def create_training_calendar(service, new_calendar_name, template_calendar_name,
 
     print("Complete!")
 
+class Event:
+    def __init__(this, date, properties):
+        this.date = date
+        this.properties = { k: v for (k,v) in properties.items() if k in EVENT_PROPERTIES_TO_RETAIN }
+
+    def build(this):
+        event = dict(this.properties)
+        event['start']['date'] = this.start_date.date().isoformat()
+        event['end']['date'] = this.end_date.date().isoformat()
+        return event
+
 def load_events_from_calendar(service, calendar_name):
     cal_id_map = get_calendar_name_id_map(service)
     if calendar_name not in cal_id_map:
         raise ValueError("Provided template calendar '{}' does not exist.".format(template_calendar_name))
 
     calendar_id = cal_id_map[template_calendar_name]
-    events = get_events_for_calendar(service, calendar_id=template_calendar_id, num_events=500)
+    cal_events = get_events_for_calendar(service, calendar_id=template_calendar_id, num_events=500)
+    events = [
+        Event(
+            date=datetime.datetime.strptime(e['start']['date'], TRAINING_CALENDAR_EVENT_DATE_FORMAT),
+            properties={ k: v for (k,v) in e.items() if k not in ('start','end') })
+        for e in cal_events]
     return events
 
 def load_events_from_file(path, column_map, race_day, ends_on_race_day):
-    events = []
+    events_raw = []
     race_day_index = -1
     column_map_lower = { k.lower(): v for (k,v) in column_map.items() }
     # TODO: Close file ASAP after opening
@@ -148,6 +164,7 @@ def load_events_from_file(path, column_map, race_day, ends_on_race_day):
         reader = csv.DictReader(f)
         for i,row in enumerate(reader):
             # TODO: Do this all at once, not per record.
+            # TODO: Filter for EVENT_PROPERTIES_TO_RETAIN after column remap
             lower = { k.lower(): v for (k,v) in row.items() }
             for from_c,to_c in column_map.items():
                 if to_c in lower:
@@ -162,21 +179,27 @@ def load_events_from_file(path, column_map, race_day, ends_on_race_day):
             if not ends_on_race_day and lower['summary'] == 'RACE DAY':
                 if race_day_index >= 0:
                     exit_with_error(\
-                        "error: multiple events with summary 'RACE DAY' found; expected at most 1 " +
+                        "error: multiple events_raw with summary 'RACE DAY' found; expected at most 1 " +
                         "(second found at entry {} in file: {})".format(i+1, path))
                 race_day_index = i
-            events.append(row)
+            events_raw.append(lower)
+
     if ends_on_race_day:
-        race_day_index = len(events)-1
+        race_day_index = len(events_raw)-1
+
     if race_day_index < 0:
         exit_with_error(
             "error: no race day detected; ensure that there is a single event with the summary 'RACE DAY'" +
             " or pass the --ends-on-race-day switch to this script (file: {})".format(path))
 
+    events = []
     race_day_dt = datetime.datetime.strptime(race_day, TRAINING_CALENDAR_EVENT_DATE_FORMAT)
-    num_events = len(events)
-    for i in range(num_events-1, 1, -1):
-         
+    for i,e in enumerate(events_raw):
+        days = race_day_index - i
+        this_dt = race_day_dt - datetime.timedelta(days=days)
+        # All events are presumed to start & end on the same day.
+        event = Event(date=this_dt, properties=e)
+        events.append(event)
     return events
 
 def exit_with_error(msg):
