@@ -15,6 +15,7 @@ from google.auth.transport.requests import Request
 import datetime
 import itertools
 import sys
+import csv
 
 SCRIPT_NAME = "create_training_calendar.py"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -166,7 +167,7 @@ def load_events_from_file(path, column_map, race_day, ends_on_race_day):
             # TODO: Do this all at once, not per record.
             # TODO: Filter for EVENT_PROPERTIES_TO_RETAIN after column remap
             lower = { k.lower(): v for (k,v) in row.items() }
-            for from_c,to_c in column_map.items():
+            for from_c,to_c in column_map_lower.items():
                 if to_c in lower:
                     exit_with_error(\
                         "error: cannot map column '{0}' to '{1}' because '{1}' already exists (file: {2})".format(\
@@ -282,6 +283,7 @@ EXAMPLES:
 
 def main(args):
     inputs = {}
+    i = 0
     while i < len(args):
         arg = args[i]
         if arg in ('-n','--name'):
@@ -332,7 +334,7 @@ def main(args):
     new_calendar_name = inputs['name']
     race_day = inputs['race_day']
     if 'tag' in inputs:
-        tag = inputs['tag'
+        tag = inputs['tag']
     else:
         tag = None
 

@@ -36,7 +36,7 @@ try
     $credentialsPath = Join-Path $PSScriptRoot 'credentials.json'
     while (-not (Test-Path $credentialsPath))
     {
-        Write-Host "Credentials not found. Visit this URL and click on the button in step 1 and download credentials to ${credentialsPath}:`nhttps://developers.google.com/google-apps/calendar/quickstart/python"
+        Write-Host "Credentials not found. Visit this URL, follow the instructions to create an OAuth client credential in GCP, and download them as JSON to ${credentialsPath}:`nhttps://developers.google.com/workspace/guides/create-credentials#desktop-app"
         Read-Host -Prompt "Press enter when downloaded"
     }
 
