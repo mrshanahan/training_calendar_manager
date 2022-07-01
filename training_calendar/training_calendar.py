@@ -18,6 +18,7 @@ import datetime
 import itertools
 import sys
 import csv
+import time
 
 SCRIPT_NAME = "create_training_calendar.py"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -103,68 +104,30 @@ def get_calendar_name_id_map(service):
     calendars = service.calendarList().list().execute().get('items', [])
     return {c['summary']: c['id'] for c in calendars}
 
-def copy_events(service, events, to_calendar_id, shift_dates_by=datetime.timedelta(0), tag=None):
-    for event in events:
-        event_start_date = datetime.datetime.strptime(event['start']['date'], TRAINING_CALENDAR_EVENT_DATE_FORMAT)
-        new_event_start_date = event_start_date + shift_dates_by
-        new_event_end_date = event_start_date + datetime.timedelta(shift_dates_by.days+1)
-        new_event_start = { 'date': new_event_start_date.date().isoformat() }
-        new_event_end = { 'date': new_event_end_date.date().isoformat() }
-
-        new_event_body = { k: event[k] for k in EVENT_PROPERTIES_TO_RETAIN if k in event }
-        new_event_body['start'] = new_event_start
-        new_event_body['end'] = new_event_end
-        if tag:
-            new_event_body['etag'] = tag
-
-        print('Creating event: {}'.format(new_event_body))
-        new_event_result = service.events().insert(calendarId=to_calendar_id, body=new_event_body).execute()
-
-def copy_events2(service, events, to_calendar_id, tag=None):
+def create_events(service, events, to_calendar_id, tag=None):
     for event in events:
         new_event_body = event.build()
         if tag:
             new_event_body['etag'] = tag
-        print('Creating event: {}'.format(new_event_body))
-        new_event_result = service.events().insert(calendarId=to_calendar_id, body=new_event_body).execute()
 
-def create_training_calendar(service, new_calendar_name, template_calendar_name, race_day, tag=None):
-    if type(race_day) is str:
-        race_day = datetime.datetime.strptime(race_day, TRAINING_CALENDAR_EVENT_DATE_FORMAT)
-
-    cal_id_map = get_calendar_name_id_map(service)
-    if template_calendar_name not in cal_id_map:
-        raise ValueError("Provided template calendar '{}' does not exist.".format(template_calendar_name))
-
-    template_calendar_id = cal_id_map[template_calendar_name]
-    template_events = get_events_for_calendar(service, calendar_id=template_calendar_id, num_events=500)
-    potential_template_race_days = [e for e in template_events if e['summary'] == RACE_DAY_SUMMARY]
-    if len(potential_template_race_days) == 0:
-        raise ValueError(
-            "No event found in template calendar ('{}') which matches string '{}'. " + 
-            "Please make sure such an event exists and run again.".format(template_calendar_name, RACE_DAY_SUMMARY))
-    if len(potential_template_race_days) > 1:
-        raise ValueError(
-            "Found {} events with summary '{}' in template calendar ('{}'). " + 
-            "Ensure only one such event exists.".format(len(potential_template_race_days), RACE_DAY_SUMMARY, template_calendar_name))
-    template_race_day = datetime.datetime.strptime(potential_template_race_days[0]['start']['date'], TRAINING_CALENDAR_EVENT_DATE_FORMAT)
-    print('Race day: {}'.format(template_race_day))
-    race_day_diff = race_day - template_race_day
-    print('Race day diff: {}'.format(race_day_diff))
-
-    if new_calendar_name not in cal_id_map:
-        print("Creating new calendar")
-        new_calendar_data = { 'summary': new_calendar_name, 'timeZone': 'America/Chicago', 'accessRole': 'owner' }
-        new_calendar_result = service.calendars().insert(body=new_calendar_data).execute()
-        print("New calendar created: {}".format(new_calendar_result))
-        new_calendar_id = new_calendar_result['id']
-    else:
-        new_calendar_id = cal_id_map[new_calendar_name]
-        print("Calendar '{}' (id='{}') already exists".format(new_calendar_name, new_calendar_id))
-
-    copy_events(service, template_events, new_calendar_id, shift_dates_by=race_day_diff, tag=tag)
-
-    print("Complete!")
+        retries = 0
+        max_retries = 3
+        success = False
+        while not success and retries <= max_retries:
+            print('Creating event: {}'.format(new_event_body))
+            try:
+                new_event_result = service.events().insert(calendarId=to_calendar_id, body=new_event_body).execute()
+                success = True
+            except HttpError as e:
+                if e.reason == 'Rate Limit Exceeded':
+                    retries += 1
+                    wait_s = 5 * retries
+                    print('warning: rate limit exceeded, waiting {} seconds before retry ({}/{})'.format(wait_s, retries, max_retries), file=sys.stderr)
+                    time.sleep(wait_s)
+                else:
+                    raise
+        if retries > max_retries:
+            exit_with_error('error: retry limit exceeded ({})'.format(max_retries))
 
 def load_events_from_calendar(service, calendar_name, race_day, ends_on_race_day):
     cal_id_map = get_calendar_name_id_map(service)
@@ -253,8 +216,8 @@ def find_race_day(events):
 
 def exit_with_error(msg):
     raise TrainingCalendarError(msg)
-    print(msg, file=sys.stderr)
-    sys.exit(1)
+    #print(msg, file=sys.stderr)
+    #sys.exit(1)
 
 def help_and_exit():
     helpstr = """{script_upper}
@@ -443,8 +406,7 @@ def main(args):
         for e in events:
             print("WHAT-IF: Copying event: {} (tag: {})".format(str(e), tag if tag else '<NONE>'))
     else:
-        copy_events2(service, events, new_calendar_id, tag)
-        #create_training_calendar(service, new_calendar_name, TEMPLATE_CALENDAR_NAME, race_day, tag=tag)
+        create_events(service, events, new_calendar_id, tag)
 
 if __name__ == '__main__':
     try:
