@@ -216,8 +216,6 @@ def find_race_day(events):
 
 def exit_with_error(msg):
     raise TrainingCalendarError(msg)
-    #print(msg, file=sys.stderr)
-    #sys.exit(1)
 
 def help_and_exit():
     helpstr = """{script_upper}
@@ -407,11 +405,3 @@ def main(args):
             print("WHAT-IF: Copying event: {} (tag: {})".format(str(e), tag if tag else '<NONE>'))
     else:
         create_events(service, events, new_calendar_id, tag)
-
-if __name__ == '__main__':
-    try:
-        args = sys.argv[1:]
-        main(args)
-    except TrainingCalendarError as e:
-        print('error: {}'.format(e.message), file=sys.stderr)
-        sys.exit(1)
