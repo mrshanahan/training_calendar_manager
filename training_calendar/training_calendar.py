@@ -75,6 +75,9 @@ class Event:
         event['end'] = { 'date': self.end.date().isoformat() }
         return event
 
+    def is_empty(self):
+        return not self.properties['summary']
+
     def __str__(self):
         return "Event(start:{}, end:{}, {})".format(
                 datetime.datetime.strftime(self.start, TRAINING_CALENDAR_EVENT_DATE_FORMAT),
@@ -106,6 +109,10 @@ def get_calendar_name_id_map(service):
 
 def create_events(service, events, to_calendar_id, tag=None):
     for event in events:
+        if event.is_empty():
+            print('Skipping empty event: {}'.format(event))
+            continue
+
         new_event_body = event.build()
         if tag:
             new_event_body['etag'] = tag
@@ -153,16 +160,20 @@ def load_events_from_calendar(service, calendar_name, race_day, ends_on_race_day
         for e in cal_events]
     return events
 
+def get_input_handle(path):
+    if path == '--':
+        return sys.stdin
+    return open(path, 'r')
+
 def load_events_from_file(path, column_map, race_day, ends_on_race_day):
     events_raw = []
     race_day_index = -1
     column_map_lower = { k.lower(): v.lower() for (k,v) in column_map.items() }
     # TODO: Close file ASAP after opening
-    with open(path, 'r') as f:
+    with get_input_handle(path) as f:
         reader = csv.DictReader(f)
         for i,row in enumerate(reader):
             # TODO: Do this all at once, not per record.
-            # TODO: Filter for EVENT_PROPERTIES_TO_RETAIN after column remap
             from_lower = { k.lower(): v for (k,v) in row.items() }
             to_lower = {}
             for from_c,to_c in column_map_lower.items():
@@ -227,7 +238,8 @@ USAGE:
 
     -n,--name <name>                    Display name for the calendar to be created.
     -r,--race-day <date>                Date that the given race will take place. Format: '{fmt}'
-    -f,--file <path>                    CSV file from which events should be copied.
+    -f,--file <path>                    CSV file from which events should be copied. Use '--' to
+                                          read the events from stdin.
     -c,--template-calendar <name>       Name of template calendar from which events should
                                           be copied.
     -t,--tag <name>                     Name of the tag with which each event in the calendar
@@ -267,14 +279,14 @@ EXAMPLES:
   - Create a new calendar called 'Iron Dragon 2019' for a race day on June 15, 2019:
 
       $ python {script} \\
-              -n 'Iron Dragon 2019' -r '2019-06-15' -c 'Iron Man 70.3 Training Template'
+              -n 'Iron Dragon 2019' -r 2019-06-15 -c 'Iron Man 70.3 Training Template'
 
   - Create a new calendar called 'Iron Man 70.3 (Madison 2020)' for a race day on
     July 4, 2020 and tag each event with 'IM2020':
 
       $ python {script} \\
-              -n 'Iron Man 70.3 (Madison 2020)' -r '2020-07-04' \\
-              -c 'Iron Man 70.3 Training Template' -t 'IM2020'
+              -n 'Iron Man 70.3 (Madison 2020)' -r 2020-07-04 \\
+              -c 'Iron Man 70.3 Training Template' -t IM2020
 
   - Create a new calendar called 'Baltimore Marathon 2022' for a race day on
     October 15, 2022 using events from a CSV file called 'marathon_training.csv':
@@ -286,7 +298,13 @@ EXAMPLES:
       ,Wed,20 min jog,"Allowed to walk, but not part of training"
       ,Thu,REST,
       $ python {script} \\
-              -n 'Baltimore Marathon 2022' -r '2022-10-15' -f marathon_training.csv
+              -n 'Baltimore Marathon 2022' -r 2022-10-15 -f marathon_training.csv
+
+  - Create a new calendar called 'Fun Run - August 2023' using events from stdin,
+    omitting the last 3 events in the source CSV file:
+
+      $ head -n -3 fun_run.csv | python {script} \\
+              -n 'Fun Run - August 2023' -r 2023-08-12
 
 """.format(script_upper=SCRIPT_NAME.upper(), script=SCRIPT_NAME, fmt=TRAINING_CALENDAR_EVENT_DATE_FORMAT)
 
